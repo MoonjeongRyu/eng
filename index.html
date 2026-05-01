@@ -1133,11 +1133,16 @@ function renderTodayPanel() {
           <div class="review-unit">Unit ${item.unit} · ${item.label}</div>
           <div class="review-meta">${item.daysAgo}일 전 학습</div>
         </div>
-        <button class="review-done-btn" onclick="markReviewDone(event, ${item.unit}, ${item.interval})">완료</button>
+        <button class="review-done-btn" onclick="markReviewDone(event, ${item.unit}, ${item.interval}, ${item.reviewIdx})">완료</button>
       </div>
     `).join('');
   }
 }
+
+// 이전 회차 복습 완료일 기준으로 다음 복습일 계산
+// 간격: 1차(+1일), 2차(+2일), 3차(+4일), 4차(+7일), 5차(+14일)
+const REVIEW_GAPS = [1, 2, 4, 7, 14];
+const REVIEW_LABELS = ['1차 복습', '2차 복습', '3차 복습', '4차 복습', '5차 복습'];
 
 function getReviewDue() {
   const due = [];
@@ -1145,23 +1150,53 @@ function getReviewDue() {
 
   Object.entries(state.units).forEach(([unitNum, data]) => {
     if (!data.completedDates?.length) return;
-    const lastComplete = data.completedDates[data.completedDates.length - 1];
-    const daysAgo = daysBetween(lastComplete, todayStr);
 
-    REVIEW_INTERVALS.forEach((interval, idx) => {
-      if (daysAgo >= interval) {
-        const alreadyReviewed = data.reviewDates?.some(r => {
-          return r.interval === interval && daysBetween(lastComplete, r.date) >= interval;
-        });
-        if (!alreadyReviewed) {
-          const labels = ['1차 복습', '2차 복습', '3차 복습', '4차 복습', '5차 복습'];
-          due.push({ unit: parseInt(unitNum), label: labels[idx], daysAgo, interval });
-        }
+    // 최초 학습일 (review 태그 없는 것 중 첫 번째)
+    const firstComplete = data.completedDates.find(d => !String(d).includes('_review_'));
+    if (!firstComplete) return;
+
+    const reviewDates = (data.reviewDates || []).filter(r => r.interval !== 999);
+
+    // 각 회차별로 체크
+    for (let idx = 0; idx < 5; idx++) {
+      // 이미 완료됐는지 확인
+      const alreadyDone = reviewDates.some(r => r.interval === REVIEW_GAPS[idx] && idx === REVIEW_GAPS.indexOf(r.interval)
+        // interval이 같을 수 있으니 순서로 판단
+      );
+
+      // idx번째 복습이 완료됐는지: reviewDates에 idx번째 항목이 있으면 완료
+      const completedCount = reviewDates.length;
+      if (idx < completedCount) continue; // 이미 완료
+
+      // 기준일 계산: 0차는 최초학습일, 그 이후는 이전 복습 완료일
+      let baseDate;
+      if (idx === 0) {
+        baseDate = firstComplete;
+      } else {
+        // idx-1번째 복습 완료일
+        const prevReview = reviewDates[idx - 1];
+        if (!prevReview) break; // 이전 복습 안 했으면 다음 복습 뜨지 않음
+        baseDate = prevReview.date;
       }
-    });
+
+      const gap = REVIEW_GAPS[idx];
+      const daysFromBase = daysBetween(baseDate, todayStr);
+
+      if (daysFromBase >= gap) {
+        due.push({
+          unit: parseInt(unitNum),
+          label: REVIEW_LABELS[idx],
+          daysAgo: daysBetween(firstComplete, todayStr),
+          interval: REVIEW_GAPS[idx],
+          reviewIdx: idx
+        });
+        break; // 한 번에 하나씩만 표시
+      }
+      break; // 아직 날짜 안 됐으면 다음 회차도 체크 안 함
+    }
   });
 
-  return due.slice(0, 5); // show max 5
+  return due.slice(0, 5);
 }
 
 function completeToday() {
@@ -1183,23 +1218,19 @@ function completeToday() {
   init();
 }
 
-function markReviewDone(e, unitNum, interval) {
+function markReviewDone(e, unitNum, interval, reviewIdx) {
   e.stopPropagation();
   if (!state.units[unitNum]) return;
   if (!state.units[unitNum].reviewDates) state.units[unitNum].reviewDates = [];
 
-  const lastComplete = state.units[unitNum].completedDates[state.units[unitNum].completedDates.length - 1];
-  state.units[unitNum].reviewDates.push({ date: today(), interval });
+  // 해당 회차 복습 완료 기록
+  state.units[unitNum].reviewDates.push({ date: today(), interval, idx: reviewIdx });
 
-  // 회독 수 올리기 (interval 순서 = 회독차)
-  const intervalIdx = [1,3,7,14,30].indexOf(interval);
-  const reads = state.units[unitNum].completedDates.length;
-  // 복습 완료할 때마다 completedDates에 날짜 추가해서 회독 수 반영
-  state.units[unitNum].completedDates.push(today() + '_review_' + (intervalIdx + 2));
+  // 회독 수 반영 (completedDates에 추가)
+  state.units[unitNum].completedDates.push(today() + '_review_' + (reviewIdx + 2));
 
-  // 5차 복습(5회독) 완료 체크
-  const totalReviews = state.units[unitNum].reviewDates.length;
-  if (totalReviews >= 5) {
+  // 5차 복습 완료 체크
+  if (state.units[unitNum].reviewDates.filter(r => r.interval !== 999).length >= 5) {
     checkAllUnitsComplete();
   }
 
