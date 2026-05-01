@@ -1187,7 +1187,20 @@ function markReviewDone(e, unitNum) {
   e.stopPropagation();
   if (!state.units[unitNum]) return;
   if (!state.units[unitNum].reviewDates) state.units[unitNum].reviewDates = [];
-  state.units[unitNum].reviewDates.push({ date: today(), interval: 999 });
+
+  const lastComplete = state.units[unitNum].completedDates[state.units[unitNum].completedDates.length - 1];
+  const daysAgo = daysBetween(lastComplete, today());
+  REVIEW_INTERVALS.forEach(interval => {
+    if (daysAgo >= interval) {
+      const alreadyReviewed = state.units[unitNum].reviewDates.some(r =>
+        r.interval === interval && daysBetween(lastComplete, r.date) >= interval
+      );
+      if (!alreadyReviewed) {
+        state.units[unitNum].reviewDates.push({ date: today(), interval });
+      }
+    }
+  });
+
   save();
   renderTodayPanel();
 }
