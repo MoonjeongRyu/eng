@@ -1051,7 +1051,8 @@ function daysBetween(a, b) {
   return Math.round((new Date(b) - new Date(a)) / 86400000);
 }
 function formatDate(d) {
-  const dt = new Date(d);
+  const clean = String(d).split('_review_')[0];
+  const dt = new Date(clean);
   return `${dt.getMonth()+1}/${dt.getDate()}`;
 }
 
@@ -1275,7 +1276,8 @@ function renderUnitGrid() {
     const uData = state.units[i];
     const completed = uData?.completedDates?.length > 0;
     const isToday = i === state.todayUnit;
-    const reads = uData?.completedDates?.filter(d => !String(d).includes('_review_')).length || 0;
+    const reads = (uData?.completedDates?.filter(d => !String(d).includes('_review_')).length || 0) + 
+               (uData?.reviewDates?.filter(r => r.interval !== 999).length || 0);
     let cls = 'unit-cell';
     if (completed) cls += ' completed';
     if (isToday) cls += ' today-cell';
