@@ -940,7 +940,7 @@
     <button class="complete-btn" id="completeTodayBtn" onclick="completeToday()">✓ 오늘 완료로 표시</button>
   </div>
 
-  <div class="section-title">복습 예정</div>
+  <div class="section-title">회독 예정</div>
   <div class="review-list" id="reviewList">
     <div class="empty-state">
       <div class="empty-icon">🎯</div>
@@ -1068,7 +1068,7 @@ function init() {
 function computeTodayUnit() {
   // Find next unit not completed or partially done
   const completedAll = Object.entries(state.units)
-    .filter(([k,v]) => v.completedDates && v.completedDates.length > 0)
+    .filter(([k,v]) => v.completedDates && v.completedDates.some(d => !String(d).includes('_review_')))
     .map(([k]) => parseInt(k));
 
   let nextUnit = 1;
@@ -1091,7 +1091,7 @@ function computeTodayUnit() {
 }
 
 function updateStats() {
-  const done = Object.values(state.units).filter(v => v.completedDates?.length > 0).length;
+  const done = Object.values(state.units).filter(v => v.completedDates?.some(d => !String(d).includes('_review_'))).length;
   document.getElementById('statDone').textContent = done;
   document.getElementById('statStreak').textContent = state.streak;
   const pct = Math.round(done / TOTAL * 100);
@@ -1130,10 +1130,10 @@ function renderTodayPanel() {
       <div class="review-card" onclick="openUnitModal(${item.unit})">
         <div class="review-badge">${item.unit}</div>
         <div class="review-info">
-          <div class="review-unit">Unit ${item.unit} 복습</div>
-          <div class="review-meta">${item.label} · ${item.daysAgo}일 전 학습</div>
+          <div class="review-unit">Unit ${item.unit} · ${item.label}</div>
+          <div class="review-meta">${item.daysAgo}일 전 학습</div>
         </div>
-        <button class="review-done-btn" onclick="markReviewDone(event, ${item.unit})">완료</button>
+        <button class="review-done-btn" onclick="markReviewDone(event, ${item.unit}, ${item.interval})">완료</button>
       </div>
     `).join('');
   }
@@ -1154,7 +1154,7 @@ function getReviewDue() {
           return r.interval === interval && daysBetween(lastComplete, r.date) >= interval;
         });
         if (!alreadyReviewed) {
-          const labels = ['1일 후', '3일 후', '1주일 후', '2주일 후', '1달 후'];
+          const labels = ['1차 복습', '2차 복습', '3차 복습', '4차 복습', '5차 복습'];
           due.push({ unit: parseInt(unitNum), label: labels[idx], daysAgo, interval });
         }
       }
@@ -1183,26 +1183,57 @@ function completeToday() {
   init();
 }
 
-function markReviewDone(e, unitNum) {
+function markReviewDone(e, unitNum, interval) {
   e.stopPropagation();
   if (!state.units[unitNum]) return;
   if (!state.units[unitNum].reviewDates) state.units[unitNum].reviewDates = [];
 
   const lastComplete = state.units[unitNum].completedDates[state.units[unitNum].completedDates.length - 1];
-  const daysAgo = daysBetween(lastComplete, today());
-  REVIEW_INTERVALS.forEach(interval => {
-    if (daysAgo >= interval) {
-      const alreadyReviewed = state.units[unitNum].reviewDates.some(r =>
-        r.interval === interval && daysBetween(lastComplete, r.date) >= interval
-      );
-      if (!alreadyReviewed) {
-        state.units[unitNum].reviewDates.push({ date: today(), interval });
-      }
-    }
-  });
+  state.units[unitNum].reviewDates.push({ date: today(), interval });
+
+  // 회독 수 올리기 (interval 순서 = 회독차)
+  const intervalIdx = [1,3,7,14,30].indexOf(interval);
+  const reads = state.units[unitNum].completedDates.length;
+  // 복습 완료할 때마다 completedDates에 날짜 추가해서 회독 수 반영
+  state.units[unitNum].completedDates.push(today() + '_review_' + (intervalIdx + 2));
+
+  // 5차 복습(5회독) 완료 체크
+  const totalReviews = state.units[unitNum].reviewDates.length;
+  if (totalReviews >= 5) {
+    checkAllUnitsComplete();
+  }
 
   save();
   renderTodayPanel();
+  renderUnitGrid();
+}
+
+function checkAllUnitsComplete() {
+  const allDone = Array.from({length: TOTAL}, (_, i) => i + 1).every(i => {
+    return state.units[i]?.reviewDates?.length >= 5;
+  });
+  if (allDone) {
+    setTimeout(() => {
+      if (confirm('🎉 모든 유닛 5회독 완료! 진도를 초기화할까요?\n(저장된 표현은 유지돼요)')) {
+        resetProgress();
+      }
+    }, 300);
+  }
+}
+
+function resetProgress() {
+  const savedExprs = state.expressions;
+  state = {
+    units: {},
+    expressions: savedExprs,
+    startDate: new Date().toDateString(),
+    todayUnit: 1,
+    streak: 0,
+    lastStudyDate: null
+  };
+  save();
+  showToast('🌸 진도 초기화 완료! 표현은 그대로야.', 'success');
+  init();
 }
 
 // ===== UNIT GRID =====
@@ -1213,7 +1244,7 @@ function renderUnitGrid() {
     const uData = state.units[i];
     const completed = uData?.completedDates?.length > 0;
     const isToday = i === state.todayUnit;
-    const reads = uData?.completedDates?.length || 0;
+    const reads = uData?.completedDates?.filter(d => !String(d).includes('_review_')).length || 0;
     let cls = 'unit-cell';
     if (completed) cls += ' completed';
     if (isToday) cls += ' today-cell';
